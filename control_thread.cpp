@@ -77,7 +77,7 @@ double k = 0, dist_goal, dist_IOU = 0.5;// 默认终点半径1米内无障碍物
 
 int i = 1;
 int num_i = 1;//当前巡点序号
-int num_end = 7;//巡点数量上限
+int num_end = 1;//巡点数量上限
 extern float psi_def = 1.5;//阈值
 extern float Rov_x;//机器人坐标, 同 x,y
 extern float Rov_y;
@@ -109,9 +109,9 @@ float delta_psi_last = 0;
 float delta_psi_diff = 0;
 //parameters
 float d_t = 0.05; // 时间步长，单位s
-float cruise_speed = 25;//巡航速度
-float dis_def_navigate = 0.4;//m 到达终点的判定范围
-float dis_def_collecte = 350;//mm 到达垃圾点的判定范围
+float cruise_speed = 25; //巡航速度
+float dis_def_navigate = 0.2; //m 到达终点的判定范围
+float dis_def_collecte = 350; //mm 到达垃圾点的判定范围
 float tau_n = 0;//转向力矩，控制量
 float tau_n_last = 0;
 float F = 0;//推进器推力，N
@@ -195,12 +195,14 @@ ControlThread::ControlThread(QObject *parent)
 //    {
 //        map[j].resize(240);// 160*160
 //    }
-    // 生成全局路径点，打印输出
-    pathX = -0.01;//设置规划起点
+    // APF专用，生成全局路径点，打印输出
+    pathX = -0.01;//设置规划起点，最好离出发点坐标近一些
     pathY = -0.05;
+    goalX = 10; // 定义全局目标点坐标
+    goalY = 10;
     APF_Generate();
 
-    // 初始化pk、pk+1
+    // APF专用，初始化pk、pk+1
     if (simple_len < 2)
         qDebug() << "Too few points!" << endl;
     p_x = path_simple[0][0];
@@ -218,63 +220,39 @@ ControlThread::ControlThread(QObject *parent)
     {
         timer_control->stop();
 
-        x = Rov_x;// 读取机器人当前坐标，los法求解才用到
+        x = Rov_x;// 读取机器人当前坐标，los法求解才用到 
         y = Rov_y;
 
         // 更新正弦参考（集中函数），确保控制线程也驱动参考演化
         update_tracking_refs(Ts);
         // 调试输出（每秒一次）
-        static double dbg_accum = 0.0; dbg_accum += Ts;
-        if(dbg_accum >= 1.0) { dbg_accum = 0.0; qDebug() << "[REF] r_amp=" << ref_r_amp << " r_ref=" << ref_r; }
-
-        // 期望速度差值
-        //mpc_u = 0;//调试定速跟踪，用matlab要删掉
-//        mpc_r = 0 + 0.2*sin(2*M_PI*t / 40);
-//        t = t + Ts;
+        // static double dbg_accum = 0.0; dbg_accum += Ts;
+        // if(dbg_accum >= 1.0) { dbg_accum = 0.0; qDebug() << "[REF] r_amp=" << ref_r_amp << " r_ref=" << ref_r; }
 
         //更新ESO,tau应该是由螺旋桨推力产生的力矩，需解算
         my_eso->eso_calculate(Rov_psi,m_r,motor_value,Rov_r);
 
-        //QMutexLocker locker(&myMutex_2);//加锁,Rov_location[][]
-        // 巡点控制才用到
-//        x_los = P_location[num_i][0];// x对应0, y对应1
-//        y_los = P_location[num_i][1];
-//        delta_d = sqrt(pow(x_los-x,2) + pow(y_los-y,2));//到预设目标点的距离
-//        qDebug()<<x_los<<" "<<y_los<<delta_d;
-        //qDebug()<<delta_d;
+        // 状态机逻辑
+        if(flag == 0)
+            flag_control = 0;//warm up
+        else if(flag == 1)
+            flag_control = 1;//collect
+        else if(flag == 2)
+            flag_control = 2;//point to point
+        else if(flag == 3)
+            flag_control = 3;//apf
+        else if(flag == 4)
+            flag_control = 9;//stop
+        else if(flag == 5)
+            flag_control = 10;//keep
+        else if(flag == 6)
+            flag_control = 4;//tracking
+        else if(flag == 7)
+            flag_control = 5;//MPC-CBF-ST
+        else if(flag == 8)
+            flag_control = 6;// velocity tracking
 
-        //judge
-//        if(distance[0] <= 0.01||distance[1] <= 0.01||distance[2] <= 0.01||distance[3] <= 0.01)  //When d > 0.5m, how to add random force?
-//        {
-//            //qDebug()<<"nice";
-//            if(flag == 0)
-//                flag_control = 9;//stop 初始离障碍物近，则保持静止
-//            else
-//                flag_control = 8;//avoid 运动过程离障碍物近，则开启避障
-//        }
-//        else
-//        {
-            if(flag == 0)
-                flag_control = 0;//warm up
-            else if(flag == 1)
-                flag_control = 1;//collect
-            else if(flag == 2)
-                flag_control = 2;//point to point
-            else if(flag == 3)
-                flag_control = 3;//apf
-            else if(flag == 4)
-                flag_control = 9;//stop
-            else if(flag == 5)
-                flag_control = 10;//keep
-            else if(flag == 6)
-                flag_control = 4;//tracking
-            else if(flag == 7)
-                flag_control = 5;//MPC-CBF-ST
-            else if(flag == 8)
-                flag_control = 6;// velocity tracking
-        //}
-
-        //to do
+        // 执行分支
         switch (flag_control)
         {
         case 0:
@@ -285,7 +263,7 @@ ControlThread::ControlThread(QObject *parent)
             {
                 delta_v = cruise_speed;
                 //flag = 7;//表明已匀速前进，MPC-CBF-ST
-                flag = 8; // 速度跟踪测试
+                flag = 2; // 巡点跟踪
 //                RX=x+4.1;
 //                RY=y;
                 //psi_d = Rov_psi + 45;//相对偏差角，好处是可以设置delta的初始值
@@ -324,24 +302,57 @@ ControlThread::ControlThread(QObject *parent)
             break;
         case 2:
             //巡点导航
-            psi_solve();
-            if(num_i <= num_end)
-            {
-                if(abs(delta_psi) >= psi_def && delta_d > dis_def_navigate)// 转向控制调参 delta_psi取0只进入第一个if，实际导航可取2-3°
+            // map_set 窗口中存储的路径点，从1开始
+            x_los = P_location[num_i][0]; // x对应0, y对应1
+            y_los = P_location[num_i][1];
+            delta_d = sqrt(pow(x_los-x,2) + pow(y_los-y,2)); //到预设目标点的距离
+            qDebug()<<"num_i = "<< num_i <<" x_los = "<<x_los<<" y_los = "<<y_los<<" delta_d = "<<delta_d<<endl;
+            // 依次巡点
+            if(num_i < num_end){
+                // 先求解 delta_psi
+                psi_solve();
+                // delta_psi 小于阈值时，直接前进
+                if(abs(delta_psi) >= psi_def && delta_d > dis_def_navigate)
                 {
-                    //PID();
-                    SMC();
+                    PID();
+                    //SMC();
                 }
-                else if(delta_d > dis_def_navigate)//(-delta_psi,delta_psi) 且 未到达终点
+                else if(abs(delta_psi) < psi_def && delta_d > dis_def_navigate) // (-delta_psi, delta_psi) 且 未到达终点
                 {
-                    cmd[26] = 128 - cruise_speed;
+                    cmd[26] = 128 - cruise_speed; // 保持前进
                     cmd[27] = 128 - cruise_speed;
                 }
-                else if(delta_d <= dis_def_navigate)//(-delta_psi,delta_psi) 且 到达终点
+                else if(abs(delta_psi) < psi_def && delta_d <= dis_def_navigate) //(-delta_psi, delta_psi) 且 到达终点
                 {
-                    if(num_i == num_end )
-                        flag = 4;// 停转
-                    num_i++;
+                    num_i++; // 开始跟踪下一个点
+                }
+            }else if(num_i == num_end){
+                // 最后一个为虚拟目标点，其位置可随意设置，这里只进行转向跟踪
+                float target_psi = 0; 
+                // 计算偏差角误差
+                delta_psi = target_psi - Rov_psi; // 跟踪固定姿态
+                // 校正突变
+                if(abs(psi_d - Rov_psi)<=180)
+                    delta_psi = psi_d - Rov_psi;
+                else if((psi_d - Rov_psi) > 180)
+                    delta_psi = psi_d - Rov_psi - 360;//校正临界突变，限制在[-180,180]
+                else if((psi_d - Rov_psi) < -180)
+                    delta_psi = psi_d - Rov_psi + 360;
+                // 限幅
+                if(delta_psi >= 180)
+                    delta_psi = 180;
+                else if(delta_psi <=-180)
+                    delta_psi = -180;
+                // 转向控制
+                if(abs(delta_psi) >= psi_def)
+                {
+                    PID();
+                }
+                else
+                {
+                    qDebug() << "Target reached!" << endl;
+                    cmd[26] = 128; // 停止
+                    cmd[27] = 128;
                 }
             }
             break;
@@ -359,13 +370,13 @@ ControlThread::ControlThread(QObject *parent)
                 //y_los = goalY;
                 dist_goal = sqrt(pow(goalX - x, 2)+pow(goalY - y, 2));
                 qDebug()<<"dist_goal= "<<dist_goal;
-                if (dist_goal <= dist_IOU && flag2 == 0)// 到达到终点
+                if (dist_goal <= dist_IOU && flag2 == 0)// 首次到达到终点
                 {
                     qDebug() << "Target reached!" << endl;
                     // 机器人刹车
                     flag = 4;//停止态
                     flag2++;
-                    // 求解delta_psi
+                    // 直接以终点作为转向目标，求解delta_psi
                     psi_solve();
                     // 将最后一段路径点保存到 path_final
                     int last_len = final_len;
@@ -387,8 +398,8 @@ ControlThread::ControlThread(QObject *parent)
                     // 推进器转向控制
                     if(abs(delta_psi) >= psi_def)//
                     {
-                        //PID();
-                        SMC();
+                        PID();
+                        //SMC();
                     }
                     else //(-delta_psi,delta_psi) 且 未到达终点
                     {
@@ -400,16 +411,6 @@ ControlThread::ControlThread(QObject *parent)
                 else if(flag2 == 1)// 到终点后保持静止
                 {
                    // 机器人刹车
-//                    if(i < 10)//制动1s后，停转
-//                    {
-//                        i ++;
-//                        cmd[26] = 128 + 15 + cruise_speed;
-//                        cmd[27] = 128 + 15 + cruise_speed;
-//                    }
-//                    else
-//                    {
-//                        flag = 4;//停转
-//                    }
                     flag = 4;//停转
                 }
             }
@@ -433,8 +434,8 @@ ControlThread::ControlThread(QObject *parent)
                 // 推进器转向控制
                 if(abs(delta_psi) >= psi_def)//
                 {
-                    //PID();
-                    SMC();
+                    PID();
+                    //SMC();
                 }
                 else //(-delta_psi,delta_psi) 且 未到达终点
                 {
@@ -534,7 +535,6 @@ ControlThread::ControlThread(QObject *parent)
                 }
             }
             break;
-
         case 7:
             cmd[28] = 128;//前推静止
             cmd[29] = 128;
@@ -581,7 +581,7 @@ ControlThread::ControlThread(QObject *parent)
                     cmd[27] = 128 - thrust;
                     // 更新历史
                     u_e_prev2 = u_e_prev1; 
-                    u_e_prev1 = u_error; 
+                    u_e_prev1 = u_error;
                     u_cmd_prev = u_cmd;
                 }
 
@@ -602,8 +602,8 @@ ControlThread::ControlThread(QObject *parent)
                     int thrust_v = (v_cmd >= 0)? static_cast<int>(v_cmd + 0.5) : static_cast<int>(v_cmd - 0.5);
                     cmd[28] = 128 - thrust_v;
                     cmd[29] = 128 - thrust_v;
-                    v_e_prev2 = v_e_prev1; 
-                    v_e_prev1 = v_error; 
+                    v_e_prev2 = v_e_prev1;
+                    v_e_prev1 = v_error;
                     v_cmd_prev = v_cmd;
                 }
             }
@@ -645,7 +645,7 @@ ControlThread::ControlThread(QObject *parent)
 
         // qDebug()<<"Rov_psi = "<<Rov_psi<<", Rov_psi_last = "<<Rov_psi_last<<endl;
         //写入文本文件
-        out <<my_eso->z1<<" "<<my_eso->z2<<" "<<my_eso->z3<<" "<<x<<" "<<y<<" "<<y3<<" "<<y4<<" "<<y5<<" "<<speed_u<<" "<<motor_value<<" "<<Rov_u<<" "<<Rov_r<<" "<<mpc_u<<" "<<mpc_r<<" "<<mpc_u_e<<" "<<mpc_r_e<<" "<<delta_psi<<endl;
+        out <<x<<" "<<y<<" "<<y3<<" "<<y4<<" "<<y5<<" "<<" "<<Rov_u<<" "<<Rov_v<<" "<<Rov_r<<" "<<ref_u<<" "<<ref_v<<" "<<ref_r" "<<delta_psi<<" "<<num_i<<" "<<x_los<<" "<<y_los<<endl;
         timer_control->start(Ts*1000);//重启定时器,每100ms查看一次状态
     });
 
@@ -775,46 +775,31 @@ void ControlThread::psi_solve()
     else if((psi_d - Rov_psi) < -180)
         delta_psi = psi_d - Rov_psi + 360;
     //限幅
-    if(delta_psi >= 40)
-        delta_psi = 40;
-    else if(delta_psi <=-40)
-        delta_psi = -40;
+    if(delta_psi >= 180)
+        delta_psi = 180;
+    else if(delta_psi <=-180)
+        delta_psi = -180;
 
-//    // 更新微分量, 转为rad/s 取两次平均值
-//    float psi_diff = 0;
-//    if (abs(Rov_psi - Rov_psi_last) < 180)
-//        psi_diff = (Rov_psi - Rov_psi_last) * (M_PI / 180) / Ts;// r = psi'
-//    else if(Rov_psi - Rov_psi_last >= 180)
-//        psi_diff = (-360 + Rov_psi - Rov_psi_last) * (M_PI / 180) / Ts;// r = psi'
-//    else if(Rov_psi - Rov_psi_last <= -180)
-//        psi_diff = (360 + Rov_psi - Rov_psi_last) * (M_PI / 180) / Ts;// r = psi'
-
-//    Rov_psi_diff = psi_diff;
-//    qDebug()<<"Rov_psi_diff = "<<Rov_psi_diff<<endl;
-//    //qDebug()<<"filter_buf[] = "<<filter_buf[0]<<" "<<filter_buf[1]<<" "<<filter_buf[2]<<" "<<filter_buf[3]<<" "<<filter_buf[5]<<endl;
-
-//    Rov_psi_diff_2 = (Rov_psi_diff - Rov_psi_diff_last) * (M_PI / 180) / Ts;// r'
     psi_d_diff = (psi_d - psi_d_last) * (M_PI / 180) / Ts;// psi_d'
     psi_d_diff_2 = (psi_d_diff - psi_d_diff_last) * (M_PI / 180) / Ts;// psi_d''
     delta_psi_diff = psi_d_diff - Rov_psi_diff;// delta_psi'
 }
-// PID控制
+
+// 位置式 PID 转向控制
 void ControlThread::PID()
 {
     int tau = 0;
     tau_n = kp *delta_psi + kd *(delta_psi - delta_psi_last);//pd控制
-    if(tau_n >= 40)//幅度上限
-        tau_n = 40;
-    else if(tau_n <= -40)
-        tau_n = -40;
-    else if(tau_n >0 && tau_n <=2)//幅度下限
-        tau_n = 2;
-    else if(tau_n < 0 && tau_n >= -2)
-        tau_n = -2;
-    if(tau_n >= 0)
-        tau = (int)(tau_n + 0.5);//四舍五入取整
-    else
-        tau = (int)(tau_n - 0.5);
+    // 限幅
+    if(tau_n >= 25) tau_n = 25; 
+    else if(tau_n <= -25) tau_n = -25;
+    // 去死区 (-18， 18)
+    if(tau_n > 0) tau_n = tau_n + 18;
+    else if(tau_n < 0) tau_n = tau_n - 18;
+    else tau_n = 0;
+    // 四舍五入取整
+    if(tau_n >= 0)tau = (int)(tau_n + 0.5); 
+    else tau = (int)(tau_n - 0.5);
     cmd[26] = 128 - tau;
     cmd[27] = 128 + tau;
 }

@@ -214,8 +214,8 @@ void MainWindow::keyPressEvent(QKeyEvent * event)
     {
     //前进
     case Qt::Key_W:
-        cmd[3] = 128 - 18;//模拟左右摇杆前推，均设为0x70--112
-        cmd[5] = 128 - 18;
+        cmd[3] = 128 - 35;//模拟左右摇杆前推，均设为0x70--112
+        cmd[5] = 128 - 35;
         qDebug() <<"ROV前进";
         ui->textEdit_Write->append("ROV前进");
         break;
@@ -228,15 +228,15 @@ void MainWindow::keyPressEvent(QKeyEvent * event)
         break;
     //左旋转
     case Qt::Key_Q:
-        cmd[3] = 128 - 20;//模拟右摇杆前推，左摇杆后推
-        cmd[5] = 128 + 20;
+        cmd[3] = 128 - 35;//模拟右摇杆前推，左摇杆后推
+        cmd[5] = 128 + 35;
         qDebug() <<"ROV左旋转";
         ui->textEdit_Write->append("ROV左旋转");
         break;
     //右旋转
     case Qt::Key_E:
-        cmd[3] = 186;//模拟右摇杆后推，左摇杆前推
-        cmd[5] = 70;
+        cmd[3] = 128 + 35;//模拟右摇杆后推，左摇杆前推
+        cmd[5] = 128 - 35;
         qDebug() <<"ROV右旋转";
         ui->textEdit_Write->append("ROV右旋转");
         break;
